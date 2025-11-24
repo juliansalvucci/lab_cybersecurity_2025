@@ -2,13 +2,6 @@
 """
 CLASE 7 - SEGURIDAD EN LA NUBE Y VIRTUALIZACIÓN
 Ejercicio 1: Detección de Buckets S3 Públicos
-
-Descripción:
-Este script audita buckets de S3 en AWS para identificar configuraciones
-inseguras que permitan acceso público no autorizado.
-
-Autor: UTN FRVM - Laboratorio de Ciberseguridad
-Versión: 1.0
 """
 
 import boto3
@@ -16,6 +9,7 @@ import sys
 from botocore.exceptions import ClientError, BotoCoreError, NoCredentialsError
 from datetime import datetime
 import json
+import argparse
 
 
 class S3SecurityAuditor:
@@ -24,40 +18,44 @@ class S3SecurityAuditor:
     Identifica configuraciones inseguras y genera reportes.
     """
 
-    def __init__(self, profile_name=None, region=None):
+    def __init__(self, profile_name=None, region=None, use_localstack=False):
         """
-        Inicializa el auditor con credenciales de AWS.
-
-        Args:
-            profile_name (str): Nombre del perfil de AWS CLI (opcional)
-            region (str): Región de AWS (opcional)
+        Inicializa el auditor con credenciales de AWS o LocalStack.
         """
         try:
-            if profile_name:
-                session = boto3.Session(profile_name=profile_name)
-                self.s3 = session.client('s3')
-            else:
-                self.s3 = boto3.client('s3', region_name=region)
+            if use_localstack:
+                print("[+] Conectando a LocalStack...")
 
-            print("[+] Conexión establecida con AWS S3")
+                self.s3 = boto3.client(
+                    's3',
+                    endpoint_url="http://localhost:4566",
+                    aws_access_key_id="test",
+                    aws_secret_access_key="test",
+                    region_name=region or "us-east-1"
+                )
+
+            else:
+                print("[+] Conectando a AWS...")
+                if profile_name:
+                    session = boto3.Session(profile_name=profile_name)
+                    self.s3 = session.client('s3', region_name=region)
+                else:
+                    self.s3 = boto3.client('s3', region_name=region)
+
+            print("[+] Conexión establecida correctamente")
             print(f"[+] Fecha de auditoría: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             print("-" * 70)
 
         except NoCredentialsError:
             print("[!] ERROR: No se encontraron credenciales de AWS")
-            print("[!] Configure sus credenciales con 'aws configure'")
+            print("[!] Configure credenciales con 'aws configure'")
             sys.exit(1)
+
         except Exception as e:
-            print(f"[!] ERROR al conectar con AWS: {str(e)}")
+            print(f"[!] ERROR al conectar: {str(e)}")
             sys.exit(1)
 
     def list_all_buckets(self):
-        """
-        Lista todos los buckets S3 de la cuenta.
-
-        Returns:
-            list: Lista de nombres de buckets
-        """
         try:
             response = self.s3.list_buckets()
             buckets = [bucket['Name'] for bucket in response.get('Buckets', [])]
@@ -68,15 +66,6 @@ class S3SecurityAuditor:
             return []
 
     def check_bucket_acl(self, bucket_name):
-        """
-        Verifica la ACL de un bucket específico.
-
-        Args:
-            bucket_name (str): Nombre del bucket
-
-        Returns:
-            dict: Información sobre permisos públicos encontrados
-        """
         try:
             acl = self.s3.get_bucket_acl(Bucket=bucket_name)
             public_permissions = []
@@ -85,7 +74,6 @@ class S3SecurityAuditor:
                 grantee = grant.get('Grantee', {})
                 permission = grant.get('Permission', '')
 
-                # Verificar acceso público
                 uri = grantee.get('URI', '')
                 if uri in [
                     'http://acs.amazonaws.com/groups/global/AllUsers',
@@ -122,20 +110,10 @@ class S3SecurityAuditor:
                 }
 
     def check_bucket_policy(self, bucket_name):
-        """
-        Verifica la política del bucket para acceso público.
-
-        Args:
-            bucket_name (str): Nombre del bucket
-
-        Returns:
-            dict: Información sobre la política del bucket
-        """
         try:
             policy = self.s3.get_bucket_policy(Bucket=bucket_name)
             policy_document = json.loads(policy['Policy'])
 
-            # Analizar si la política permite acceso público
             has_public_policy = False
             public_statements = []
 
@@ -143,10 +121,10 @@ class S3SecurityAuditor:
                 principal = statement.get('Principal', {})
                 effect = statement.get('Effect', '')
 
-                # Verificar si el principal es público
                 if (principal == '*' or
-                    principal.get('AWS') == '*' or
-                    principal == {"AWS": "*"}):
+                        principal == {"AWS": "*"} or
+                        principal.get('AWS') == '*'):
+
                     if effect == 'Allow':
                         has_public_policy = True
                         public_statements.append({
@@ -162,31 +140,21 @@ class S3SecurityAuditor:
             }
 
         except ClientError as e:
-            error_code = e.response.get('Error', {}).get('Code', '')
-            if error_code == 'NoSuchBucketPolicy':
+            code = e.response.get('Error', {}).get('Code', '')
+            if code == 'NoSuchBucketPolicy':
                 return {
                     'has_policy': False,
                     'is_public': False,
                     'statements': []
                 }
-            else:
-                return {
-                    'has_policy': False,
-                    'is_public': False,
-                    'error': str(e),
-                    'statements': []
-                }
+            return {
+                'has_policy': False,
+                'is_public': False,
+                'error': str(e),
+                'statements': []
+            }
 
     def check_public_access_block(self, bucket_name):
-        """
-        Verifica la configuración de bloqueo de acceso público.
-
-        Args:
-            bucket_name (str): Nombre del bucket
-
-        Returns:
-            dict: Configuración del bloqueo de acceso público
-        """
         try:
             response = self.s3.get_public_access_block(Bucket=bucket_name)
             config = response.get('PublicAccessBlockConfiguration', {})
@@ -200,8 +168,8 @@ class S3SecurityAuditor:
             }
 
         except ClientError as e:
-            error_code = e.response.get('Error', {}).get('Code', '')
-            if error_code == 'NoSuchPublicAccessBlockConfiguration':
+            code = e.response.get('Error', {}).get('Code', '')
+            if code == 'NoSuchPublicAccessBlockConfiguration':
                 return {
                     'enabled': False,
                     'block_public_acls': False,
@@ -209,49 +177,31 @@ class S3SecurityAuditor:
                     'block_public_policy': False,
                     'restrict_public_buckets': False
                 }
-            else:
-                return {
-                    'enabled': False,
-                    'error': str(e)
-                }
+            return {
+                'enabled': False,
+                'error': str(e)
+            }
 
     def audit_bucket(self, bucket_name, verbose=False):
-        """
-        Realiza auditoría completa de un bucket.
-
-        Args:
-            bucket_name (str): Nombre del bucket
-            verbose (bool): Mostrar información detallada
-
-        Returns:
-            dict: Resultados de la auditoría
-        """
         if verbose:
             print(f"\n[*] Auditando: {bucket_name}")
 
-        # Verificar ACL
         acl_info = self.check_bucket_acl(bucket_name)
-
-        # Verificar política
         policy_info = self.check_bucket_policy(bucket_name)
-
-        # Verificar bloqueo de acceso público
         block_info = self.check_public_access_block(bucket_name)
 
-        # Determinar si el bucket es público
-        is_public = (acl_info['is_public'] or policy_info['is_public'])
+        is_public = acl_info['is_public'] or policy_info['is_public']
 
-        # Determinar nivel de riesgo
         if is_public and not block_info['enabled']:
             risk_level = "CRÍTICO"
-        elif is_public and block_info['enabled']:
+        elif is_public:
             risk_level = "ALTO"
         elif not block_info['enabled']:
             risk_level = "MEDIO"
         else:
             risk_level = "BAJO"
 
-        result = {
+        return {
             'bucket': bucket_name,
             'is_public': is_public,
             'risk_level': risk_level,
@@ -260,18 +210,7 @@ class S3SecurityAuditor:
             'public_access_block': block_info
         }
 
-        return result
-
     def audit_all_buckets(self, verbose=False):
-        """
-        Audita todos los buckets de la cuenta.
-
-        Args:
-            verbose (bool): Mostrar información detallada
-
-        Returns:
-            list: Lista de resultados de auditoría
-        """
         buckets = self.list_all_buckets()
 
         if not buckets:
@@ -281,33 +220,22 @@ class S3SecurityAuditor:
         print("\n[*] Iniciando auditoría de seguridad...")
         print("-" * 70)
 
-        results = []
-        for bucket_name in buckets:
-            result = self.audit_bucket(bucket_name, verbose)
-            results.append(result)
-
-        return results
+        return [self.audit_bucket(b, verbose) for b in buckets]
 
     def print_summary(self, results):
-        """
-        Imprime un resumen de los resultados de la auditoría.
-
-        Args:
-            results (list): Lista de resultados de auditoría
-        """
         print("\n" + "=" * 70)
         print("RESUMEN DE AUDITORÍA DE SEGURIDAD S3")
         print("=" * 70)
 
         total_buckets = len(results)
         public_buckets = [r for r in results if r['is_public']]
-        critical_buckets = [r for r in results if r['risk_level'] == 'CRÍTICO']
-        high_risk_buckets = [r for r in results if r['risk_level'] == 'ALTO']
+        critical = [r for r in results if r['risk_level'] == 'CRÍTICO']
+        high = [r for r in results if r['risk_level'] == 'ALTO']
 
         print(f"\n[+] Total de buckets analizados: {total_buckets}")
         print(f"[!] Buckets públicos encontrados: {len(public_buckets)}")
-        print(f"[!] Buckets con riesgo CRÍTICO: {len(critical_buckets)}")
-        print(f"[!] Buckets con riesgo ALTO: {len(high_risk_buckets)}")
+        print(f"[!] Buckets con riesgo CRÍTICO: {len(critical)}")
+        print(f"[!] Buckets con riesgo ALTO: {len(high)}")
 
         if public_buckets:
             print("\n" + "-" * 70)
@@ -315,27 +243,17 @@ class S3SecurityAuditor:
             print("-" * 70)
 
             for result in public_buckets:
-                bucket_name = result['bucket']
-                risk_level = result['risk_level']
+                print(f"\n[!] Bucket: {result['bucket']}")
+                print(f"    Nivel de riesgo: {result['risk_level']}")
 
-                print(f"\n[!] Bucket: {bucket_name}")
-                print(f"    Nivel de riesgo: {risk_level}")
+                for perm in result['acl']['permissions']:
+                    print(f"      - {perm['group']}: {perm['permission']}")
 
-                # Mostrar permisos de ACL
-                if result['acl']['permissions']:
-                    print("    Permisos ACL públicos:")
-                    for perm in result['acl']['permissions']:
-                        print(f"      - {perm['group']}: {perm['permission']}")
-
-                # Mostrar política pública
                 if result['policy']['is_public']:
-                    print("    Política pública detectada:")
                     for stmt in result['policy']['statements']:
                         print(f"      - Actions: {stmt['actions']}")
 
-                # Mostrar estado del bloqueo
-                block_info = result['public_access_block']
-                if not block_info['enabled']:
+                if not result['public_access_block']['enabled']:
                     print("    [!] ADVERTENCIA: Bloqueo de acceso público NO configurado")
 
         print("\n" + "=" * 70)
@@ -343,22 +261,15 @@ class S3SecurityAuditor:
         print("=" * 70)
         print("""
 1. Revisar y eliminar permisos públicos innecesarios
-2. Habilitar 'Block Public Access' en todos los buckets
-3. Implementar políticas de bucket con principio de mínimo privilegio
-4. Configurar cifrado en reposo (SSE-S3 o SSE-KMS)
-5. Habilitar logging de acceso al bucket
-6. Implementar versionado para protección contra eliminación
-7. Usar AWS Config para monitoreo continuo
+2. Habilitar 'Block Public Access'
+3. Implementar principio de mínimo privilegio
+4. Activar cifrado SSE-S3 o SSE-KMS
+5. Habilitar logging del bucket
+6. Activar versionado
+7. Usar AWS Config para monitoreo constante
         """)
 
     def export_to_json(self, results, filename='audit_results.json'):
-        """
-        Exporta los resultados a un archivo JSON.
-
-        Args:
-            results (list): Lista de resultados de auditoría
-            filename (str): Nombre del archivo de salida
-        """
         try:
             output = {
                 'timestamp': datetime.now().isoformat(),
@@ -376,35 +287,40 @@ class S3SecurityAuditor:
             print(f"[!] ERROR al exportar resultados: {e}")
 
 
+# -----------------------------------------
+# PARSER (fuera de la clase)
+# -----------------------------------------
+
+parser = argparse.ArgumentParser(
+    description="Auditor de seguridad S3 (AWS / LocalStack)"
+)
+
+parser.add_argument("--localstack", action="store_true", help="Usar LocalStack")
+parser.add_argument("--profile", type=str, help="Perfil AWS CLI")
+parser.add_argument("--region", type=str, default="us-east-1", help="Región AWS")
+
+args = parser.parse_args()
+
+
 def main():
-    """
-    Función principal del script.
-    """
     print("=" * 70)
     print("AUDITOR DE SEGURIDAD S3 - CLASE 7")
     print("UTN - Laboratorio de Ciberseguridad")
     print("=" * 70)
 
-    # Inicializar auditor
-    auditor = S3SecurityAuditor()
+    auditor = S3SecurityAuditor(
+        profile_name=args.profile,
+        region=args.region,
+        use_localstack=args.localstack
+    )
 
-    # Ejecutar auditoría
     results = auditor.audit_all_buckets(verbose=False)
 
-    # Mostrar resumen
     auditor.print_summary(results)
-
-    # Exportar resultados
     auditor.export_to_json(results)
 
-    # Retornar código de salida
     public_count = len([r for r in results if r['is_public']])
-    if public_count > 0:
-        print(f"\n[!] ATENCIÓN: Se encontraron {public_count} buckets públicos")
-        sys.exit(1)
-    else:
-        print("\n[+] No se encontraron buckets públicos")
-        sys.exit(0)
+    sys.exit(1 if public_count > 0 else 0)
 
 
 if __name__ == '__main__':

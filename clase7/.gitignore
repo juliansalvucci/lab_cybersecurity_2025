@@ -1,0 +1,31 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Entorno
+.env
+.venv
+env/
+ENV/
+
+# Resultados del laboratorio
+resultados/
+logs/
+backups/
+*.json
+!templates/*.json
+
+# Credenciales (¡NUNCA COMMITEAR!)
+*credentials*
+*.pem
+*.key
+
+# Temporales
+*.log
+*.tmp
+.DS_Store
