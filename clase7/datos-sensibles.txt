@@ -1,0 +1,4 @@
+Usuario: admin
+Password: Admin123!
+API Key: sk-1234567890abcdef
+Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
